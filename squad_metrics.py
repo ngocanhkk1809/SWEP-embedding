@@ -13,7 +13,7 @@ import math
 import re
 import string
 
-from transformers.tokenization_bert import BasicTokenizer
+from transformers.models.bert.tokenization_bert import BasicTokenizer
 
 
 class SquadResult(object):

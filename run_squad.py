@@ -294,7 +294,6 @@ if __name__ == "__main__":
     parser.add_argument("--bert_model", type=str, default="bert-base-uncased")
 
     parser.add_argument("--model_dir", type=str, default="./save/swep")
-    parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--seed", type=int, default=1004)
 
     parser.add_argument("--version_2_with_negative", action="store_true")
