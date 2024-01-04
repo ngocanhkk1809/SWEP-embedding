@@ -2,3 +2,4 @@ json_lines
 transformers
 accelerate
 datasets
+wandb
