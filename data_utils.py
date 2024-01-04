@@ -1,4 +1,7 @@
+import torch
+import time
 from torch.utils.data import DataLoader
+from torch.utils.data.sampler import SequentialSampler
 from datasets import Dataset
 import datasets
 from typing import Optional, Callable, List
@@ -8,11 +11,12 @@ import inspect
 logger = logging.getLogger(__name__)
 
 
-class TrainDataloader:
-    def __init__(self, model, train_dataset, data_collator, args):
+class GetDataloader:
+    def __init__(self, model, train_dataset, eval_dataset=None, data_collator=None, args=None):
         self.args = args
         self.data_collator = data_collator
         self.train_dataset = train_dataset
+        self.eval_dataset = eval_dataset
         self.model = model.base_model
 
         self._signature_columns = None
@@ -46,6 +50,51 @@ class TrainDataloader:
         }
 
         return DataLoader(self.train_dataset, **dataloader_params)
+
+    def get_eval_dataloader(self) -> DataLoader:
+        """
+        Returns the evaluation [`~torch.utils.data.DataLoader`].
+
+        Subclass and override this method if you want to inject some custom behavior.
+
+        Args:
+            eval_dataset (`torch.utils.data.Dataset`, *optional*):
+                If provided, will override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns not accepted
+                by the `model.forward()` method are automatically removed. It must implement `__len__`.
+        """
+        if self.eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        eval_dataset = self.eval_dataset if self.eval_dataset is not None else self.eval_dataset
+        data_collator = self.data_collator
+
+        if isinstance(eval_dataset, datasets.Dataset):
+            eval_dataset = self._remove_unused_columns(eval_dataset, description="evaluation")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="evaluation")
+
+        dataloader_params = {
+            "batch_size": self.args.eval_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+
+        return DataLoader(eval_dataset, **dataloader_params)
+
+    def _get_eval_sampler(self, eval_dataset: Dataset) -> Optional[torch.utils.data.Sampler]:
+        # Deprecated code
+        if self.args.use_legacy_prediction_loop:
+            return SequentialSampler(eval_dataset)
+
+        if self.args.world_size <= 1:
+            return SequentialSampler(eval_dataset)
+        else:
+            return None
 
     def _remove_unused_columns(self, dataset: "Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
@@ -100,6 +149,47 @@ class TrainDataloader:
             self._signature_columns = list(signature.parameters.keys())
             # Labels may be named label or label_ids, the default data collator handles that.
             self._signature_columns += list(set(["label", "label_ids"] + self.label_names))
+
+    # def evaluate(self, eval_dataset):
+    #     # handle multipe eval datasets
+    #     eval_dataset = eval_dataset if eval_dataset is not None else eval_dataset
+    #     if isinstance(eval_dataset, dict):
+    #         metrics = {}
+    #         for eval_dataset_name, _eval_dataset in eval_dataset.items():
+    #             dataset_metrics = self.evaluate(
+    #                 eval_dataset=_eval_dataset,
+    #             )
+    #             metrics.update(dataset_metrics)
+    #         return metrics
+    #
+    #     eval_dataloader = self.get_eval_dataloader()
+    #     start_time = time.time()
+    #
+    #     eval_loop = self.prediction_loop if self.args.use_legacy_prediction_loop else self.evaluation_loop
+    #     output = eval_loop(
+    #         eval_dataloader,
+    #         description="Evaluation",
+    #         # No point gathering the predictions if there are no metrics, otherwise we defer to
+    #         # self.args.prediction_loss_only
+    #         prediction_loss_only=True if self.compute_metrics is None else None,
+    #         ignore_keys=ignore_keys,
+    #         metric_key_prefix=metric_key_prefix,
+    #     )
+    #
+    #     total_batch_size = self.args.eval_batch_size * self.args.world_size
+    #
+    #     output.metrics.update(
+    #         speed_metrics(
+    #             metric_key_prefix,
+    #             start_time,
+    #             num_samples=output.num_samples,
+    #             num_steps=math.ceil(output.num_samples / total_batch_size),
+    #         )
+    #     )
+    #
+    #     self.log(output.metrics)
+    #
+    #     return output.metrics
 
 
 class RemoveColumnsCollator:
@@ -179,3 +269,5 @@ def infer_framework(model_class):
             return "flax"
     else:
         raise TypeError(f"Could not infer framework from class {model_class}.")
+
+

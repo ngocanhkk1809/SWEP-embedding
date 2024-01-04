@@ -3085,6 +3085,10 @@ class Trainer:
 
         return output.metrics
 
+    def update_model_parameters(self, model):
+        self.model = model
+
+
     def predict(
         self, test_dataset: Dataset, ignore_keys: Optional[List[str]] = None, metric_key_prefix: str = "test"
     ) -> PredictionOutput:

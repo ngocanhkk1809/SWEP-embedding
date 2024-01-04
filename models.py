@@ -193,7 +193,7 @@ class VariationalElectra(nn.Module):
 
 
 class VariationalModel(nn.Module):
-    def __init__(self, base_model, dropout):
+    def __init__(self, base_model, args):
         super(VariationalModel, self).__init__()
         self.base_model = base_model
         config = self.base_model.config
@@ -201,12 +201,58 @@ class VariationalModel(nn.Module):
         self.dropout = config.hidden_dropout_prob
         self.noise_net = nn.Sequential(nn.Linear(hidden_size, hidden_size),
                                        nn.ReLU(),
-                                       nn.Dropout(dropout),  # 0.15
+                                       nn.Dropout(args.dropout),  # 0.15
                                        nn.Linear(hidden_size, hidden_size * 2))
 
+    def forward(self, input_ids, labels):
 
-def forward(self, input_ids, attention_mask):
-        base_model_output = self.base_model(input_ids, attention_mask)
-        output = self.dropout(base_model_output.pooler_output)
-        output = self.classifier(output)
-        return output
+        embeddings = self.base_model.get_input_embeddings()
+        encoder = self.bert_model.bert
+        with torch.no_grad():
+            encoder_inputs = {"input_ids": input_ids,
+                              "labels": labels,
+                              }
+
+            outputs = encoder(**encoder_inputs)
+            hiddens = outputs[0]
+
+        mask = (labels < 0)
+        indices = mask.view(-1)
+        mu_logvar = self.noise_net(hiddens)
+        mu, log_var = torch.chunk(mu_logvar, 2, dim=-1)
+        zs = mu + torch.randn_like(mu) * torch.exp(0.5 * log_var)
+        noise = torch.where(mask.unsqueeze(-1).expand_as(zs), zs, torch.ones_like(zs).to(zs.device))
+
+        prior_mu = torch.ones_like(mu)
+        # If p < 0.5, sqrt makes variance the larger
+        prior_var = torch.ones_like(
+            mu) * sqrt(self.dropout / (1 - self.dropout))
+        prior_logvar = torch.log(prior_var)
+
+        kl_criterion = GaussianKLLoss()
+        h = self.embedding_size
+        _mu = mu.contiguous().view(-1, h)[indices]
+        _log_var = log_var.contiguous().view(-1, h)[indices]
+        _prior_mu = prior_mu.contiguous().view(-1, h)[indices]
+        _prior_logvar = prior_logvar.contiguous().view(-1, h)[indices]
+
+        kl = kl_criterion(_mu, _log_var, _prior_mu, _prior_logvar)
+
+        inputs_embeds = embeddings(input_ids)
+        inputs = {"inputs_embeds": inputs_embeds * noise,
+                  "labels": labels,
+                  }
+
+        noise_outputs = self.base_model(**inputs)
+        noise_loss = noise_outputs[0]
+
+        new_inputs = {"inputs_embeds": inputs_embeds,
+                      "labels": labels,
+                    }
+
+        outputs = self.base_model(**new_inputs)
+        nll = outputs[0]
+        loss = 0.5 * (nll + noise_loss)
+
+        return (loss, kl)
+
