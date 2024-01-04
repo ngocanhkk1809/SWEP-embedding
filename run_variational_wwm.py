@@ -291,7 +291,7 @@ def main():
         model = AutoModelForMaskedLM.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
-    model = VariationalModel(model, dropout=0.1)        # Add dropout
+    # model = VariationalModel(model, dropout=0.1)        # Add dropout
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
