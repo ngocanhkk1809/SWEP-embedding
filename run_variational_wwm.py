@@ -1,12 +1,12 @@
-
 import json
 import logging
 import math
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple, Dict, Union, Any, Mapping
 import torch
+from torch import nn
 from tqdm import tqdm
 from datasets import Dataset, load_dataset
 
@@ -27,7 +27,7 @@ from transformers import (
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from models import VariationalModel
-from data_utils import TrainDataloader
+from data_utils import GetDataloader
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -51,6 +51,14 @@ class ModelArguments:
     model_type: Optional[str] = field(
         default=None,
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
+    )
+    dropout: float = field(
+        default=0.0,
+        metadata={"help": "Add dropout to the noise perturbation"},
+    )
+    beta: float = field(
+        default=0.1,
+        metadata={"help": "Regularization term for KL loss"},
     )
     config_overrides: Optional[str] = field(
         default=None,
@@ -155,6 +163,44 @@ class DataTrainingArguments:
         if self.validation_file is not None:
             extension = self.validation_file.split(".")[-1]
             assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, a json or a txt file."
+
+
+def _prepare_input(data: Union[torch.Tensor, Any], device='cpu') -> Union[torch.Tensor, Any]:
+    """
+    Prepares one `data` before feeding it to the model, be it a tensor or a nested list/dictionary of tensors.
+    """
+    if isinstance(data, Mapping):
+        return type(data)({k: _prepare_input(v, device) for k, v in data.items()})
+    elif isinstance(data, (tuple, list)):
+        return type(data)(_prepare_input(v, device) for v in data)
+    elif isinstance(data, torch.Tensor):
+        kwargs = {"device": device}
+
+        return data.to(**kwargs)
+    return data
+
+
+def _prepare_inputs(inputs: Dict[str, Union[torch.Tensor, Any]], device) -> Dict[str, Union[torch.Tensor, Any]]:
+    """
+    Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
+    handling potential state.
+    """
+    inputs = _prepare_input(inputs, device)
+    if len(inputs) == 0:
+        raise ValueError(
+            "The batch received was empty, your model won't be able to train on it. Double-check that your "
+            f"training dataset contains keys expected by the model."
+        )
+
+    return inputs
+
+
+def save_model(args, model, epoch):
+    if not os.path.exists(args.model_dir):
+        os.makedirs(args.model_dir)
+    ckpt_file = os.path.join(args.model_dir, f"bert_base_epoch_{epoch}.pt")
+    ckpt = {"args": args, "state_dict": model.state_dict()}
+    torch.save(ckpt, ckpt_file)
 
 
 def main():
@@ -326,10 +372,16 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
 
-    model = VariationalModel(model, model_args.dropout) # TODO: Add model dropout
+    model = VariationalModel(model, model_args)
     model = model.to(device)
 
-    train_dataloader = TrainDataloader(model, tokenized_datasets, data_collator, training_args).get_train_dataloader()
+    dataloader = GetDataloader(model,
+                               tokenized_datasets["train"],
+                               tokenized_datasets["eval"],
+                               data_collator,
+                               training_args)
+
+    train_dataloader = dataloader.get_train_dataloader()
 
     t_total = len(train_dataloader) * training_args.num_train_epochs
 
@@ -352,53 +404,6 @@ def main():
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_warmup_steps=training_args.warmup_steps,
                                                 num_training_steps=t_total)
-'''
-    loss_log = tqdm(total=0, bar_format='{desc}', position=1)
-    for _ in range(training_args.num_train_epochs):
-        model.train()
-        num_batches = len(train_dataloader)
-
-        for batch in tqdm(train_dataloader, total=num_batches, position=0, leave=False):
-            inputs = process_batch(batch, device)
-            outputs = model(**inputs)
-            if args.baseline:
-                loss = outputs[0]
-                loss_str = "NLL: {:.4f}".format(loss.item())
-            else:
-                nll, kl = outputs[0], outputs[1]
-                loss = nll + kl * args.beta
-                loss_str = "NLL: {:.4f}, KL: {:.4f}".format(
-                    nll.item(), kl.item())
-            loss.backward()
-
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-            optimizer.step()
-            scheduler.step()
-            model.zero_grad()
-
-            loss_log.set_description_str(loss_str)
-
-            if args.debug:
-                break
-
-        # save model
-        save_model(args, model)
-
-    # load the best model from validation-set
-    ckpt_file = os.path.join(args.model_dir, "bert_base.pt")
-    ckpt = torch.load(ckpt_file, map_location="cpu")
-    state_dict = ckpt["state_dict"]
-    model.load_state_dict(state_dict)
-    model = model.to(device)
-
-    results = evaluate(args, model, tokenizer)
-    output_file = os.path.join(args.model_dir, "metrics.txt")
-    with open(output_file, "w") as f:
-        for k, v in results.items():
-            print("{}: {:.4f}".format(k, v))
-            f.write("{}: {:.4f}\n".format(k, v))
-
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -410,47 +415,72 @@ def main():
         data_collator=data_collator,
     )
 
-    # Training
-    if training_args.do_train:
-        if last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        elif model_args.model_name_or_path is not None and os.path.isdir(model_args.model_name_or_path):
-            checkpoint = model_args.model_name_or_path
-        else:
-            checkpoint = None
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # Saves the tokenizer too for easy upload
+    loss_log = tqdm(total=0, bar_format='{desc}', position=1)
+    step = 0
+    for epoch in range(training_args.num_train_epochs):
+        model.train()
+        num_batches = len(train_dataloader)
 
-        output_train_file = os.path.join(training_args.output_dir, "train_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_train_file, "w") as writer:
-                logger.info("***** Train results *****")
-                for key, value in sorted(train_result.metrics.items()):
-                    logger.info(f"  {key} = {value}")
-                    writer.write(f"{key} = {value}\n")
+        for batch in tqdm(train_dataloader, total=num_batches, position=0, leave=False):
+            inputs = _prepare_inputs(batch, device)
+            outputs = model(**inputs)
+            step += 1
 
-            # Need to save the state, since Trainer.save_model saves only the tokenizer with the model
-            trainer.state.save_to_json(os.path.join(training_args.output_dir, "trainer_state.json"))
+            nll, kl = outputs[0], outputs[1]
+            loss = nll + kl * model_args.beta
+            loss_str = "NLL: {:.4f}, KL: {:.4f}".format(
+                nll.item(), kl.item())
+            loss.backward()
 
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            optimizer.step()
+            scheduler.step()
+            model.zero_grad()
+
+            loss_log.set_description_str(loss_str)
+
+            if training_args.debug:
+                break
+
+            if step % training_args.eval_steps == 0:
+                trainer.update_model_parameters(model)
+
+                trainer.evaluate()
+
+        # save model
+        save_model(model_args, model, epoch)
+
+    # load the best model from validation-set
+    ckpt_file = os.path.join(model_args.model_dir, "bert_base_epoch_1.pt")
+    ckpt = torch.load(ckpt_file, map_location="cpu")
+    state_dict = ckpt["state_dict"]
+    model.load_state_dict(state_dict)
+    model = model.to(device)
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_datasets["train"] if training_args.do_train else None,
+        eval_dataset=tokenized_datasets["validation"] if training_args.do_eval else None,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+    )
     # Evaluation
     results = {}
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
+    logger.info("*** Evaluate ***")
+    eval_output = trainer.evaluate()
 
-        eval_output = trainer.evaluate()
+    perplexity = math.exp(eval_output["eval_loss"])
+    results["perplexity"] = perplexity
+    output_file = os.path.join(model_args.model_dir, "metrics.txt")
+    with open(output_file, "w") as f:
+        logger.info("***** Evaluation results *****")
+        for k, v in results.items():
+            logger.info("{}: {:.4f}".format(k, v))
+            f.write("{}: {:.4f}\n".format(k, v))
 
-        perplexity = math.exp(eval_output["eval_loss"])
-        results["perplexity"] = perplexity
-
-        output_eval_file = os.path.join(training_args.output_dir, "eval_results_mlm_wwm.txt")
-        if trainer.is_world_process_zero():
-            with open(output_eval_file, "w") as writer:
-                logger.info("***** Eval results *****")
-                for key, value in sorted(results.items()):
-                    logger.info(f"  {key} = {value}")
-                    writer.write(f"{key} = {value}\n")
-
-    return results'''
+    return results
 
 
 if __name__ == "__main__":
