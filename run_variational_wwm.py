@@ -6,28 +6,33 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
-
+import torch
+from tqdm import tqdm
 from datasets import Dataset, load_dataset
 
 import transformers
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_MASKED_LM_MAPPING,
-    AutoConfig,
     AutoModelForMaskedLM,
+    AutoConfig,
     AutoTokenizer,
     DataCollatorForWholeWordMask,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
     set_seed,
+    AdamW,
+    get_linear_schedule_with_warmup
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from models import VariationalModel
+from data_utils import TrainDataloader
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
 
 @dataclass
 class ModelArguments:
@@ -277,22 +282,6 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    if model_args.model_name_or_path:
-        model = AutoModelForMaskedLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            token=True if model_args.use_auth_token else None,
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForMaskedLM.from_config(config)
-
-    model.resize_token_embeddings(len(tokenizer))
-    # model = VariationalModel(model, dropout=0.1)        # Add dropout
-
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     if training_args.do_train:
@@ -319,6 +308,97 @@ def main():
     # Data collator
     # This one will take care of randomly masking the tokens.
     data_collator = DataCollatorForWholeWordMask(tokenizer=tokenizer, mlm_probability=data_args.mlm_probability)
+
+    device = torch.cuda.current_device()
+
+    if model_args.model_name_or_path:
+        model = AutoModelForMaskedLM.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            token=True if model_args.use_auth_token else None,
+        )
+    else:
+        logger.info("Training new model from scratch")
+        model = AutoModelForMaskedLM.from_config(config)
+
+    model.resize_token_embeddings(len(tokenizer))
+
+    model = VariationalModel(model, model_args.dropout) # TODO: Add model dropout
+    model = model.to(device)
+
+    train_dataloader = TrainDataloader(model, tokenized_datasets, data_collator, training_args).get_train_dataloader()
+
+    t_total = len(train_dataloader) * training_args.num_train_epochs
+
+    # Prepare optimizer and schedule (linear warmup and decay)
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters()
+                       if not any(nd in n for nd in no_decay)
+                       and p.requires_grad],
+            "weight_decay": training_args.weight_decay,
+        },
+        {"params": [p for n, p in model.named_parameters() if any(
+            nd in n for nd in no_decay)
+                    and p.requires_grad], "weight_decay": 0.0},
+    ]
+    optimizer = AdamW(optimizer_grouped_parameters,
+                      lr=training_args.learning_rate, eps=training_args.adam_epsilon)
+
+    scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                num_warmup_steps=training_args.warmup_steps,
+                                                num_training_steps=t_total)
+'''
+    loss_log = tqdm(total=0, bar_format='{desc}', position=1)
+    for _ in range(training_args.num_train_epochs):
+        model.train()
+        num_batches = len(train_dataloader)
+
+        for batch in tqdm(train_dataloader, total=num_batches, position=0, leave=False):
+            inputs = process_batch(batch, device)
+            outputs = model(**inputs)
+            if args.baseline:
+                loss = outputs[0]
+                loss_str = "NLL: {:.4f}".format(loss.item())
+            else:
+                nll, kl = outputs[0], outputs[1]
+                loss = nll + kl * args.beta
+                loss_str = "NLL: {:.4f}, KL: {:.4f}".format(
+                    nll.item(), kl.item())
+            loss.backward()
+
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            optimizer.step()
+            scheduler.step()
+            model.zero_grad()
+
+            loss_log.set_description_str(loss_str)
+
+            if args.debug:
+                break
+
+        # save model
+        save_model(args, model)
+
+    # load the best model from validation-set
+    ckpt_file = os.path.join(args.model_dir, "bert_base.pt")
+    ckpt = torch.load(ckpt_file, map_location="cpu")
+    state_dict = ckpt["state_dict"]
+    model.load_state_dict(state_dict)
+    model = model.to(device)
+
+    results = evaluate(args, model, tokenizer)
+    output_file = os.path.join(args.model_dir, "metrics.txt")
+    with open(output_file, "w") as f:
+        for k, v in results.items():
+            print("{}: {:.4f}".format(k, v))
+            f.write("{}: {:.4f}\n".format(k, v))
+
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -370,7 +450,7 @@ def main():
                     logger.info(f"  {key} = {value}")
                     writer.write(f"{key} = {value}\n")
 
-    return results
+    return results'''
 
 
 if __name__ == "__main__":
