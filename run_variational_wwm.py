@@ -452,10 +452,6 @@ def main():
                     step=step,
                 )
                 wandb.log(
-                    {'train/nll': nll.item()},
-                    step=step,
-                )
-                wandb.log(
                     {'learning_rate': optimizer.param_groups[0]['lr']},
                     step=step,
                 )
