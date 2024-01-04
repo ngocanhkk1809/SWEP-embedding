@@ -491,7 +491,7 @@ def main():
     # Evaluation
     results = {}
     logger.info("*** Evaluate ***")
-    eval_output = trainer.evaluate()
+    eval_output = trainer.evaluate(tokenized_datasets["test"])
 
     perplexity = math.exp(eval_output["eval_loss"])
     results["perplexity"] = perplexity

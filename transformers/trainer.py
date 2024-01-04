@@ -3074,8 +3074,8 @@ class Trainer:
                 num_steps=math.ceil(output.num_samples / total_batch_size),
             )
         )
-
-        self.log(output.metrics, step)
+        if step is not None:
+            self.log(output.metrics, step)
 
         if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
             # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
