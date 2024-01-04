@@ -2637,7 +2637,7 @@ class Trainer:
         self.hp_search_backend = None
         return best_run
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], step) -> None:
         """
         Log `logs` on the various objects watching training.
 
@@ -2652,7 +2652,7 @@ class Trainer:
         if self.args.include_num_input_tokens_seen:
             logs["num_input_tokens_seen"] = self.state.num_input_tokens_seen
 
-        output = {**logs, **{"step": self.state.global_step}}
+        output = {**logs, **{"step": step}}
         self.state.log_history.append(output)
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
 
@@ -3075,7 +3075,7 @@ class Trainer:
             )
         )
 
-        self.log(output.metrics)
+        self.log(output.metrics, step)
 
         if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
             # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
