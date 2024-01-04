@@ -2,7 +2,10 @@ from math import sqrt
 
 import torch
 import torch.nn as nn
-from transformers import BertForQuestionAnswering, ElectraForQuestionAnswering
+from transformers import (AutoModelForMaskedLM,
+                          BertForQuestionAnswering,
+                          ElectraForQuestionAnswering)
+
 import torch.nn.functional as F
 
 
@@ -187,3 +190,25 @@ class VariationalElectra(nn.Module):
 
             outputs = self.bert_model(**inputs)
             return outputs
+
+
+class VariationalModel(nn.Module):
+    def __init__(self, base_model, dropout):
+        super(VariationalModel, self).__init__()
+        self.base_model = base_model
+        config = self.base_model.config
+        hidden_size = config.hidden_size
+        embedding_size = config.embedding_size
+        self.dropout = config.hidden_dropout_prob
+        self.embedding_size = embedding_size
+        self.noise_net = nn.Sequential(nn.Linear(hidden_size, embedding_size),
+                                       nn.ReLU(),
+                                       nn.Dropout(dropout),  # 0.15
+                                       nn.Linear(embedding_size, embedding_size * 2))
+
+
+def forward(self, input_ids, attention_mask):
+        base_model_output = self.base_model(input_ids, attention_mask)
+        output = self.dropout(base_model_output.pooler_output)
+        output = self.classifier(output)
+        return output

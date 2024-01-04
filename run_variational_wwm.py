@@ -1,25 +1,3 @@
-# coding=utf-8
-# Copyright 2020 The HuggingFace Team All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Fine-tuning the library models for masked language modeling (BERT, ALBERT, RoBERTa...) with whole word masking on a
-text file or a dataset.
-
-Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
-https://huggingface.co/models?filter=fill-mask
-"""
-# You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
 import json
 import logging
@@ -45,13 +23,12 @@ from transformers import (
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
-
+from models import VariationalModel
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
-os.environ["WANDB_API_KEY "] = "6d7164c6b59114edd8eb2a3fdd41a38b64c5d800"
 @dataclass
 class ModelArguments:
     """
@@ -130,14 +107,6 @@ class DataTrainingArguments:
     validation_file: Optional[str] = field(
         default=None,
         metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
-    )
-    train_ref_file: Optional[str] = field(
-        default=None,
-        metadata={"help": "An optional input train ref data file for whole word masking in Chinese."},
-    )
-    validation_ref_file: Optional[str] = field(
-        default=None,
-        metadata={"help": "An optional input validation ref data file for whole word masking in Chinese."},
     )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
@@ -322,6 +291,7 @@ def main():
         model = AutoModelForMaskedLM.from_config(config)
 
     model.resize_token_embeddings(len(tokenizer))
+    model = VariationalModel(model, dropout=...)        # Add dropout
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -345,18 +315,6 @@ def main():
         remove_columns=[text_column_name],
         load_from_cache_file=not data_args.overwrite_cache,
     )
-
-    # Add the chinese references if provided
-    if data_args.train_ref_file is not None:
-        tokenized_datasets["train"] = add_chinese_references(tokenized_datasets["train"], data_args.train_ref_file)
-    if data_args.validation_ref_file is not None:
-        tokenized_datasets["validation"] = add_chinese_references(
-            tokenized_datasets["validation"], data_args.validation_ref_file
-        )
-    # If we have ref files, need to avoid it removed by trainer
-    has_ref = data_args.train_ref_file or data_args.validation_ref_file
-    if has_ref:
-        training_args.remove_unused_columns = False
 
     # Data collator
     # This one will take care of randomly masking the tokens.
@@ -413,11 +371,6 @@ def main():
                     writer.write(f"{key} = {value}\n")
 
     return results
-
-
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
 
 
 if __name__ == "__main__":
