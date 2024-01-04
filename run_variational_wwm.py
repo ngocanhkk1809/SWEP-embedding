@@ -459,7 +459,8 @@ def main():
             if step % training_args.eval_steps == 0:
                 trainer.update_model_parameters(model)
 
-                eval_output = trainer.evaluate(step)
+                eval_output = trainer.evaluate(eval_dataset=tokenized_datasets["validation"],
+                                               step=step)
                 perplexity = math.exp(eval_output["eval_loss"])
                 wandb.log(
                     {"eval/perplexity": perplexity},
@@ -473,7 +474,7 @@ def main():
         save_model(model_args, model, epoch)
 
     # load the best model from validation-set
-    ckpt_file = os.path.join(model_args.model_dir, "bert_base_epoch_1.pt")
+    ckpt_file = os.path.join(model_args.model_dir, f"bert_base_epoch_{int(training_args.num_train_epochs)}.pt")
     ckpt = torch.load(ckpt_file, map_location="cpu")
     state_dict = ckpt["state_dict"]
     model.load_state_dict(state_dict)
