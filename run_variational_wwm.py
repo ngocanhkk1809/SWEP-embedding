@@ -377,7 +377,7 @@ def main():
 
     dataloader = GetDataloader(model,
                                tokenized_datasets["train"],
-                               tokenized_datasets["eval"],
+                               tokenized_datasets["validation"],
                                data_collator,
                                training_args)
 
