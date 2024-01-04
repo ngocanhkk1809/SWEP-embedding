@@ -463,11 +463,12 @@ def main():
             if step % training_args.eval_steps == 0:
                 trainer.update_model_parameters(model)
 
-                results = {}
-
                 eval_output = trainer.evaluate()
                 perplexity = math.exp(eval_output["eval_loss"])
-                results["perplexity"] = perplexity
+                wandb.log(
+                    {"eval/perplexity": perplexity},
+                    step=step,
+                )
 
         # save model
         save_model(model_args, model, epoch)

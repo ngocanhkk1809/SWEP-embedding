@@ -737,8 +737,6 @@ class WandbCallback(TrainerCallback):
                     init_args["name"] = args.run_name
 
             if self._wandb.run is None:
-                self._wandb.login(key="6d7164c6b59114edd8eb2a3fdd41a38b64c5d800")
-                print("YES")
                 self._wandb.init(
                     project=os.getenv("WANDB_PROJECT", "huggingface"),
                     **init_args,
