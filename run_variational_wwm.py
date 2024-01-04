@@ -471,7 +471,7 @@ def main():
                     break
 
         # save model
-        save_model(model_args, model, epoch)
+        save_model(training_args, model, epoch)
 
     # load the best model from validation-set
     ckpt_file = os.path.join(training_args.output_dir, f"bert_base_epoch_{int(training_args.num_train_epochs)}.pt")
