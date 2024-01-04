@@ -419,7 +419,8 @@ def main():
     wandb.login(key=training_args.wandb_api_key)
     wandb.init(
         project=os.getenv("WANDB_PROJECT", "huggingface"),
-
+        entity=training_args.entity,
+        name=training_args.name,
     )
 
     step = 0
