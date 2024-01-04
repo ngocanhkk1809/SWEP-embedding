@@ -921,7 +921,7 @@ class TrainingArguments:
             "choices": ["auto", "apex", "cpu_amp"],
         },
     )
-    name: str = field(
+    wandb_name: str = field(
         default="auto",
         metadata={
             "help": "The backend to be used for half precision.",
