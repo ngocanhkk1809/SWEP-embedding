@@ -417,7 +417,7 @@ def main():
 
     loss_log = tqdm(total=0, bar_format='{desc}', position=1)
     step = 0
-    for epoch in range(training_args.num_train_epochs):
+    for epoch in range(int(training_args.num_train_epochs)):
         model.train()
         num_batches = len(train_dataloader)
 
