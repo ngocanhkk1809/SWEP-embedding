@@ -3336,13 +3336,13 @@ class Trainer:
         metrics = denumpify_detensorize(metrics)
 
         if all_losses is not None:
-            metrics[f"{metric_key_prefix}_loss"] = all_losses.mean().item()
+            metrics[f"{metric_key_prefix}/{metric_key_prefix}_loss"] = all_losses.mean().item()
         if hasattr(self, "jit_compilation_time"):
             metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
 
         # Prefix all keys with metric_key_prefix + '_'
         for key in list(metrics.keys()):
-            if not key.startswith(f"{metric_key_prefix}_"):
+            if not key.startswith(f"{metric_key_prefix}"):
                 metrics[f"{metric_key_prefix}/{metric_key_prefix}_{key}"] = metrics.pop(key)
 
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
