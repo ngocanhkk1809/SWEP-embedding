@@ -419,6 +419,7 @@ def main():
     wandb.login(key=training_args.wandb_api_key)
     wandb.init(
         project=os.getenv("WANDB_PROJECT", "huggingface"),
+
     )
 
     step = 0
@@ -461,7 +462,7 @@ def main():
 
                 eval_output = trainer.evaluate(eval_dataset=tokenized_datasets["validation"],
                                                step=step)
-                perplexity = math.exp(eval_output["eval_loss"])
+                perplexity = math.exp(eval_output["eval/eval_loss"])
                 wandb.log(
                     {"eval/perplexity": perplexity},
                     step=step,
@@ -483,9 +484,10 @@ def main():
     # Evaluation
     results = {}
     logger.info("*** Evaluate ***")
-    eval_output = trainer.evaluate(tokenized_datasets["test"])
+    eval_output = trainer.evaluate(tokenized_datasets["test"],
+                                   metric_key_prefix="test")
 
-    perplexity = math.exp(eval_output["eval_loss"])
+    perplexity = math.exp(eval_output["test/test_loss"])
     results["perplexity"] = perplexity
     output_file = os.path.join(model_args.model_dir, "metrics.txt")
     with open(output_file, "w") as f:
