@@ -2992,6 +2992,7 @@ class Trainer:
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
+        step=None,
     ) -> Dict[str, float]:
         """
         Run evaluation and returns metrics.
@@ -3040,6 +3041,7 @@ class Trainer:
                     eval_dataset=_eval_dataset,
                     ignore_keys=ignore_keys,
                     metric_key_prefix=f"{metric_key_prefix}_{eval_dataset_name}",
+                    step=step,
                 )
                 metrics.update(dataset_metrics)
             return metrics

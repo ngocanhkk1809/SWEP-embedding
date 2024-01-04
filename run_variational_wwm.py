@@ -1,4 +1,5 @@
 import json
+import wandb
 import logging
 import math
 import os
@@ -415,6 +416,11 @@ def main():
         data_collator=data_collator,
     )
 
+    wandb.login(key=training_args.wandb_api_key)
+    wandb.init(
+        project=os.getenv("WANDB_PROJECT", "huggingface"),
+    )
+
     loss_log = tqdm(total=0, bar_format='{desc}', position=1)
     step = 0
     for epoch in range(int(training_args.num_train_epochs)):
@@ -428,6 +434,7 @@ def main():
 
             nll, kl = outputs[0], outputs[1]
             loss = nll + kl * model_args.beta
+
             loss_str = "NLL: {:.4f}, KL: {:.4f}".format(
                 nll.item(), kl.item())
             loss.backward()
@@ -438,6 +445,16 @@ def main():
             scheduler.step()
             model.zero_grad()
 
+            if step % training_args.log_steps == 0:
+                wandb.log(
+                    {'train/nll': nll.item()},
+                    step=step,
+                )
+                wandb.log(
+                    {'train/kl': kl.item()},
+                    step=step,
+                )
+
             loss_log.set_description_str(loss_str)
 
             if training_args.debug:
@@ -446,7 +463,11 @@ def main():
             if step % training_args.eval_steps == 0:
                 trainer.update_model_parameters(model)
 
-                trainer.evaluate()
+                results = {}
+
+                eval_output = trainer.evaluate()
+                perplexity = math.exp(eval_output["eval_loss"])
+                results["perplexity"] = perplexity
 
         # save model
         save_model(model_args, model, epoch)

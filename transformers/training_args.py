@@ -675,7 +675,10 @@ class TrainingArguments:
             )
         },
     )
-
+    wandb_api_key: str = field(
+        default=None,
+        metadata={"help": "Add API key to log to Wandb account."},
+    )
     do_train: bool = field(default=False, metadata={"help": "Whether to run training."})
     do_eval: bool = field(default=False, metadata={"help": "Whether to run eval on the dev set."})
     do_predict: bool = field(default=False, metadata={"help": "Whether to run predictions on the test set."})
@@ -973,6 +976,16 @@ class TrainingArguments:
     dataloader_drop_last: bool = field(
         default=False, metadata={"help": "Drop the last incomplete batch if it is not divisible by the batch size."}
     )
+    log_steps: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Save training loss every X steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+
     eval_steps: Optional[float] = field(
         default=None,
         metadata={
