@@ -197,9 +197,9 @@ def _prepare_inputs(inputs: Dict[str, Union[torch.Tensor, Any]], device) -> Dict
 
 
 def save_model(args, model, epoch):
-    if not os.path.exists(args.model_dir):
-        os.makedirs(args.model_dir)
-    ckpt_file = os.path.join(args.model_dir, f"bert_base_epoch_{epoch}.pt")
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    ckpt_file = os.path.join(args.output_dir, f"bert_base_epoch_{epoch}.pt")
     ckpt = {"args": args, "state_dict": model.state_dict()}
     torch.save(ckpt, ckpt_file)
 
@@ -474,20 +474,12 @@ def main():
         save_model(model_args, model, epoch)
 
     # load the best model from validation-set
-    ckpt_file = os.path.join(model_args.model_dir, f"bert_base_epoch_{int(training_args.num_train_epochs)}.pt")
+    ckpt_file = os.path.join(training_args.output_dir, f"bert_base_epoch_{int(training_args.num_train_epochs)}.pt")
     ckpt = torch.load(ckpt_file, map_location="cpu")
     state_dict = ckpt["state_dict"]
     model.load_state_dict(state_dict)
     model = model.to(device)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_datasets["train"] if training_args.do_train else None,
-        eval_dataset=tokenized_datasets["validation"] if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
     # Evaluation
     results = {}
     logger.info("*** Evaluate ***")
