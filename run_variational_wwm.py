@@ -420,7 +420,7 @@ def main():
     wandb.init(
         project=os.getenv("WANDB_PROJECT", "huggingface"),
         entity=training_args.entity,
-        name=training_args.name,
+        name=training_args.wandb_name,
     )
 
     step = 0

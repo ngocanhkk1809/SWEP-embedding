@@ -925,14 +925,13 @@ class TrainingArguments:
         default="auto",
         metadata={
             "help": "The backend to be used for half precision.",
-            "choices": ["auto", "apex", "cpu_amp"],
         },
     )
     entity: str = field(
         default="auto",
         metadata={
             "help": "The backend to be used for half precision.",
-            "choices": ["auto", "apex", "cpu_amp"],
+
         },
     )
     bf16_full_eval: bool = field(
