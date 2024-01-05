@@ -84,6 +84,10 @@ class ModelArguments:
         default=True,
         metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
     )
+    only_base_model: bool = field(
+        default=False,
+        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+    )
     model_revision: str = field(
         default="main",
         metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
@@ -373,7 +377,7 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
 
-    model = VariationalModel(model, model_args)
+    model = VariationalModel(model, model_args, only_base_model=model_args.only_base_model)
     model = model.to(device)
 
     dataloader = GetDataloader(model,
@@ -432,9 +436,13 @@ def main():
             inputs = _prepare_inputs(batch, device)
             outputs = model(**inputs)
             step += 1
-
-            nll, kl = outputs[0], outputs[1]
-            loss = nll + kl * model_args.beta
+            if model_args.only_base_model:
+                nll = outputs[0]
+                kl = None
+                loss = nll
+            else:
+                nll, kl = outputs[0], outputs[1]
+                loss = nll + kl * model_args.beta
 
             loss.backward()
 
@@ -449,10 +457,11 @@ def main():
                     {'train/nll': nll.item()},
                     step=step,
                 )
-                wandb.log(
-                    {'train/kl': kl.item()},
-                    step=step,
-                )
+                if kl:
+                    wandb.log(
+                        {'train/kl': kl.item()},
+                        step=step,
+                    )
                 wandb.log(
                     {'train/learning_rate': optimizer.param_groups[0]['lr']},
                     step=step,
