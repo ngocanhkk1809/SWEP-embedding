@@ -1,3 +1,4 @@
+import gc
 import json
 import wandb
 import logging
@@ -153,6 +154,24 @@ class DataTrainingArguments:
     )
     pad_to_max_length: bool = field(
         default=False,
+        metadata={
+            "help": (
+                "Whether to pad all samples to `max_seq_length`. "
+                "If False, will pad the samples dynamically when batching to the maximum length in the batch."
+            )
+        },
+    )
+    train_batch_size: int = field(
+        default=4,
+        metadata={
+            "help": (
+                "Whether to pad all samples to `max_seq_length`. "
+                "If False, will pad the samples dynamically when batching to the maximum length in the batch."
+            )
+        },
+    )
+    eval_batch_size: int = field(
+        default=4,
         metadata={
             "help": (
                 "Whether to pad all samples to `max_seq_length`. "
@@ -432,6 +451,7 @@ def main():
         num_batches = len(train_dataloader)
 
         for batch in tqdm(train_dataloader, total=num_batches, position=0, leave=False):
+            torch.cuda.empty_cache()
             inputs = _prepare_inputs(batch, device)
             outputs = model(**inputs)
             step += 1
@@ -465,8 +485,10 @@ def main():
                     {'train/learning_rate': optimizer.param_groups[0]['lr']},
                     step=step,
                 )
+                gc.collect()
 
             if step % training_args.eval_steps == 0:
+                torch.cuda.empty_cache()
                 trainer.update_model_parameters(model)
 
                 eval_output = trainer.evaluate(eval_dataset=tokenized_datasets["validation"],
@@ -476,7 +498,7 @@ def main():
                     {"eval/perplexity": perplexity},
                     step=step,
                 )
-
+                gc.collect()
                 if training_args.debug:
                     break
 
