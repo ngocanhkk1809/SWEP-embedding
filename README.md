@@ -20,15 +20,20 @@ This code is written in Python. Install dependencies with the command
 pip install -r requirements.txt
 ```
 
-## Create wandb project 
-
-
+## Get wandb api key
+Follow the step.
+- Step 1:
+<img align="middle" width="900" src="images/project2.png">
+- Step 2:
+<img align="middle" width="900" src="images/project2_1.png">
+- Step 3: Copy the api key to config "--wandb_api_key" in the training section.
 
 ## How to train the model
 ```bash
 python run_variational_wwm.py --tokenizer_name "bert-base-uncased" --model_type "bert" --log_steps 50 --eval_steps 50 --per_gpu_eval_batch_size 4 \
 --wandb_api_key <wandb/api/key> --dataset_name 'wikipedia' --dataset_config_name "20220301.simple" --do_train --output_dir='results' 
 ```
+- You can adjust others parameters as specified in  "run_variational_wwm/ModelArguments" to see the change in performance.
 
 ## Evaluation of the other dataset
 
