@@ -30,9 +30,11 @@ Follow the step.
 
 ## How to train the model
 ```bash
-python run_variational_wwm.py --tokenizer_name "bert-base-uncased" --model_type "bert" --log_steps 50 --eval_steps 50 --per_gpu_eval_batch_size 4 \
---wandb_api_key <wandb/api/key> --dataset_name 'wikipedia' --dataset_config_name "20220301.simple" --do_train --output_dir='results' 
+python run_variational_wwm.py --tokenizer_name "bert-base-uncased" --model_type "bert" --log_steps 50 --eval_steps 2000 \
+--wandb_api_key <wandb/api/key> --dataset_name 'wikipedia' --dataset_config_name "20220301.simple" --do_train --output_dir='results' \
+--per_device_eval_batch_size 16 --per_device_train_batch_size 8 
 ```
+
 - You can adjust others parameters as specified in  "run_variational_wwm/ModelArguments" to see the change in performance.
 
 ## Evaluation of the other dataset
