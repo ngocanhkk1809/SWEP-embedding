@@ -440,10 +440,7 @@ def main():
     )
 
     wandb.login(key=training_args.wandb_api_key)
-    wandb.init(
-        entity=training_args.entity,
-        name=training_args.wandb_name,
-    )
+    wandb.init()
 
     step = 0
     for epoch in range(int(training_args.num_train_epochs)):
