@@ -1,5 +1,6 @@
 json_lines
+tokenizers==0.15.0
 transformers
-accelerate
+accelerate>=0.21.0
 datasets
 wandb

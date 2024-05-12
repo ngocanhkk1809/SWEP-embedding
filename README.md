@@ -1,5 +1,5 @@
 # Learning to Perturb Word Embeddings for Out-of-distribution QA
-This is the Pytorch implementation for the paper **Learning to Perturb Word Embeddings for Out-of-distribution QA** (**ACL 2021**): [[Paper]](https://arxiv.org/abs/2105.02692)
+This is the customize Pytorch implementation of the paper **Learning to Perturb Word Embeddings for Out-of-distribution QA** (**ACL 2021**): [[Paper]](https://arxiv.org/abs/2105.02692) for pretraining purpose
 
 ## Abstract
 <img align="middle" width="900" src="images/concept_fig.png">
@@ -14,60 +14,20 @@ crucial to the success of DA for question answering.
 on which it largely outperforms strong baselines, including a QA-pair generation method.
 
 
-
-# Reference
-To cite the code/paper, please use this BibTex
-```bibtex
-@inproceedings{lee2021learning,
-  title={Learning to Perturb Word Embeddings for Out-of-distribution QA},
-  author={Lee, Seanie and Kang, Minki and Lee, Juho and Hwang, Sung Ju},
-  booktitle={Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics},
-  year={2021}
-}
+## Dependencies
+This code is written in Python. Install dependencies with the command 
+```bash
+pip install -r requirements.txt
 ```
 
+## Create wandb project 
 
-## Dependencies
-This code is written in Python. Dependencies include
-* python == 3.6
-* pytorch == 1.4
-* json-lines
-* tqdm
-* transformes == 3.0.2
 
 
 ## How to train the model
 ```bash
-python run_squad.py --read_data --train_file "squad-train file" --dev_file "dev-squad file" --model_dir "directory for model checkpoint"
-```
-
-## Download data for SQuAD
-```bash
-mkdir squad
-wget https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json -O ./squad/train-v1.1.json
-wget https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json -O ./squad/dev-v1.1.json
-```
-
-## Download pickle file for training SQuAD
-We provide preprocessed file of SQuAD dataset. Download tar.gz file from [here](https://drive.google.com/file/d/1cn52AG6mVviWt-zRXO8QyXXyex3rbCUi/view?usp=sharing) and unzip it at the root directory.
-
-## Download BioASQ
-```bash
-mkdir bio-asq
-wget http://participants-area.bioasq.org/MRQA2019/ -O ./bio-asq/BioASQ.jsonl.gz
-```
-
-
-## Download the other datasets
-```bash
-mkdir shift-data
-```
-You can down load the dataset from [here](https://modestyachts.github.io/squadshifts-website/)
-and put it under the directory "shift-data".
-
-## Evaluation of bio-asq
-```bash
-python eval_bio.py --ckpt_file "file path for model checkpoint" --output_dir "directory for evaluation result"
+python run_variational_wwm.py --tokenizer_name "bert-base-uncased" --model_type "bert" --log_steps 50 --eval_steps 50 --per_gpu_eval_batch_size 4 \
+--wandb_api_key <wandb/api/key> --dataset_name 'wikipedia' --dataset_config_name "20220301.simple" --do_train --output_dir='results' 
 ```
 
 ## Evaluation of the other dataset
