@@ -355,7 +355,6 @@ def main():
     # Set the logging level
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
@@ -370,9 +369,10 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
+    # Load datasets
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
-        datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
+        dataset = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
     else:
         # Load dataset from files
         data_files = {}
@@ -383,7 +383,7 @@ def main():
         extension = data_args.train_file.split(".")[-1]
         if extension == "txt":
             extension = "text"
-        datasets = load_dataset(extension, data_files=data_files)
+        dataset = load_dataset(extension, data_files=data_files)
 
     # Load pretrained model and tokenizer
     if model_args.config_name:
@@ -420,9 +420,9 @@ def main():
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     if training_args.do_train:
-        column_names = datasets["train"].column_names
+        column_names = dataset["train"].column_names
     else:
-        column_names = datasets["validation"].column_names
+        column_names = dataset["validation"].column_names
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     padding = "max_length" if data_args.pad_to_max_length else False
@@ -432,7 +432,7 @@ def main():
         examples["text"] = [line for line in examples["text"] if len(line) > 0 and not line.isspace()]
         return tokenizer(examples["text"], padding=padding, truncation=True, max_length=data_args.max_seq_length)
 
-    tokenized_datasets = datasets.map(
+    tokenized_datasets = dataset.map(
         tokenize_function,
         batched=True,
         num_proc=data_args.preprocessing_num_workers,
