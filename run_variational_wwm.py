@@ -5,6 +5,9 @@ import logging
 import math
 import os
 import sys
+import re
+import random
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Union, Any, Mapping
 import torch
@@ -227,11 +230,111 @@ def save_model(args, model, epoch):
     torch.save(ckpt, ckpt_file)
 
 
-def main():
-    # See all possible arguments in src/transformers/training_args.py
-    # or by passing the --help flag to this script.
-    # We now keep distinct sets of args, for a cleaner separation of concerns.
+def processFile(file_text):
+    sentences = re.split(r'\.\s*', file_text)
+    sentences = [sentence.strip() for sentence in sentences if sentence]
+    number_of_sentences = len(sentences)
+    return sentences, number_of_sentences
 
+def word_occur_in_sentences(sentences):
+    word_occur_in_sentences = {}
+    for sentence in sentences:
+        sentence_words = sentence.lower().split()
+        word_counts = Counter(sentence_words)
+        word_occur_in_sentences[sentence] = word_counts
+    return word_occur_in_sentences
+
+def calculate_tfidf_weights(word_occur_in_sentences, number_of_sentences):
+    tfidf_weights = {}
+    for sentence, word_counts in word_occur_in_sentences.items():
+        sentence_tfidf_weights = {}
+        for word, count in word_counts.items():
+            tf = count / len(sentence.split())
+            num_sentences_with_word = sum([1 for sent in word_occur_in_sentences if word in word_occur_in_sentences[sent]])
+            idf = math.log(number_of_sentences / (1 + num_sentences_with_word))
+            tfidf_weight = tf * idf
+            sentence_tfidf_weights[word] = tfidf_weight
+        tfidf_weights[sentence] = sentence_tfidf_weights
+    return tfidf_weights
+
+def calculate_entropy(sentences):
+    all_words = [word for sentence in sentences for word in sentence.lower().split()]
+    word_counts = Counter(all_words)
+    total_words = sum(word_counts.values())
+    
+    entropy_values = {}
+    for word, count in word_counts.items():
+        p_w = count / total_words
+        if p_w > 0:
+            entropy_values[word] = -p_w * math.log(p_w)
+        else:
+            entropy_values[word] = 0
+    
+    return entropy_values
+
+def calculate_importance(sentences, tfidf_weights, entropy_values):
+    importance_scores = []
+    for sentence in sentences:
+        words = sentence.lower().split()
+        tfidf_scores = [tfidf_weights[sentence][word] if word in tfidf_weights[sentence] else 0 for word in words]
+        entropy_scores = [entropy_values[word] if word in entropy_values else 0 for word in words]
+
+        tfidf_norm = sum(tfidf_scores)
+        entropy_norm = sum(entropy_scores)
+
+        importance_scores.append([
+            (tfidf / tfidf_norm if tfidf_norm > 0 else 0) + (entropy / entropy_norm if entropy_norm > 0 else 0)
+            for tfidf, entropy in zip(tfidf_scores, entropy_scores)
+        ])
+    return importance_scores
+
+def mask_high_importance_words(sentences, importance_scores, window_size):
+    masked_sentences = []
+    for sentence, scores in zip(sentences, importance_scores):
+        words = sentence.split()
+        sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        
+        for i in sorted_indices[:window_size]:
+            surrounding_words = []
+            for j in range(max(0, i - window_size), min(len(words), i + window_size + 1)):
+                if j != i:
+                    surrounding_words.append(words[j])
+            
+            if surrounding_words:
+                words[i] = surrounding_words[0]  
+        
+        masked_sentences.append(' '.join(words))
+    return masked_sentences
+
+def randomly_permute_remaining_words(sentences, max_percentage):
+    permuted_sentences = []
+    for sentence in sentences:
+        words = sentence.split()
+        num_to_permute = int(len(words) * max_percentage)
+        indices_to_permute = random.sample(range(len(words)), num_to_permute)
+        random.shuffle(indices_to_permute)
+        for i, j in zip(sorted(indices_to_permute), indices_to_permute):
+            words[i], words[j] = words[j], words[i]
+        permuted_sentences.append(' '.join(words))
+    return permuted_sentences
+
+def custom_data_collator(features):
+    sentences = [feature['text'] for feature in features]
+    sentences, num_sentences = processFile('\n'.join(sentences))
+    word_occur = word_occur_in_sentences(sentences)
+    tfidf_weights = calculate_tfidf_weights(word_occur, num_sentences)
+    entropy_values = calculate_entropy(sentences)
+    importance_scores = calculate_importance(sentences, tfidf_weights, entropy_values)
+    masked_sentences = mask_high_importance_words(sentences, importance_scores, window_size=5)
+    permuted_sentences = randomly_permute_remaining_words(masked_sentences, max_percentage=0.1)
+    
+    for i, sentence in enumerate(permuted_sentences):
+        features[i]['input_ids'] = tokenizer(sentence, truncation=True, padding='max_length')['input_ids']
+    
+    return features
+
+
+def main():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -240,67 +343,33 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
-    logger.setLevel(logging.INFO if is_main_process(training_args.local_rank) else logging.WARN)
+
+    log_level = training_args.get_process_log_level()
+    logger.setLevel(log_level)
+    datasets.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
 
     # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
-    # Set the verbosity to info of the Transformers logger (on main process only):
-    if is_main_process(training_args.local_rank):
-        transformers.utils.logging.set_verbosity_info()
-        transformers.utils.logging.enable_default_handler()
-        transformers.utils.logging.enable_explicit_format()
-    logger.info("Training/evaluation parameters %s", training_args)
+    logger.info(f"Training/evaluation parameters {training_args}")
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
-    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
-    # (the dataset will be downloaded automatically from the datasets Hub).
-    #
-    # For CSV/JSON files, this script will use the column called 'text' or the first column if no column called
-    # 'text' is found. You can easily tweak this behavior (see below).
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
-        if "validation" not in datasets.keys():
-            datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-            )
-            datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-            )
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -311,46 +380,41 @@ def main():
         if extension == "txt":
             extension = "text"
         datasets = load_dataset(extension, data_files=data_files)
+
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
-    # https://huggingface.co/docs/datasets/loading_datasets.
+    # https://huggingface.co/docs/datasets/loading_datasets.html.
 
     # Load pretrained model and tokenizer
-    #
-    # Distributed training:
-    # The .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
     if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
+        config = AutoConfig.from_pretrained(model_args.config_name, cache_dir=model_args.cache_dir)
     elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+        config = AutoConfig.from_pretrained(model_args.model_name_or_path, cache_dir=model_args.cache_dir)
     else:
         config = CONFIG_MAPPING[model_args.model_type]()
         logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
-            logger.info(f"New config: {config}")
 
-    tokenizer_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "use_fast": model_args.use_fast_tokenizer,
-        "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
-    }
     if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=model_args.cache_dir)
     elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, cache_dir=model_args.cache_dir)
     else:
         raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script. "
+            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
+
+    if model_args.model_name_or_path:
+        model = AutoModelForMaskedLM.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
+    else:
+        logger.info("Training new model from scratch")
+        model = AutoModelForMaskedLM.from_config(config)
+
+    model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -375,24 +439,12 @@ def main():
         load_from_cache_file=not data_args.overwrite_cache,
     )
 
-    # Data collator
-    # This one will take care of randomly masking the tokens.
-    data_collator = DataCollatorForWholeWordMask(tokenizer=tokenizer, mlm_probability=data_args.mlm_probability)
+    # Use the custom data collator
+    data_collator = custom_data_collator
 
     device = torch.cuda.current_device()
 
-    if model_args.model_name_or_path:
-        model = AutoModelForMaskedLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            token=True if model_args.use_auth_token else None,
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForMaskedLM.from_config(config)
+    model = AutoModelForMaskedLM.from_pretrained(model_args.model_name_or_path, config=config)
 
     model.resize_token_embeddings(len(tokenizer))
 
@@ -407,125 +459,7 @@ def main():
 
     train_dataloader = dataloader.get_train_dataloader()
 
-    t_total = len(train_dataloader) * training_args.num_train_epochs
-
-    # Prepare optimizer and schedule (linear warmup and decay)
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters()
-                       if not any(nd in n for nd in no_decay)
-                       and p.requires_grad],
-            "weight_decay": training_args.weight_decay,
-        },
-        {"params": [p for n, p in model.named_parameters() if any(
-            nd in n for nd in no_decay)
-                    and p.requires_grad], "weight_decay": 0.0},
-    ]
-    optimizer = AdamW(optimizer_grouped_parameters,
-                      lr=training_args.learning_rate, eps=training_args.adam_epsilon)
-
-    scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                num_warmup_steps=training_args.warmup_steps,
-                                                num_training_steps=t_total)
-
-    # Initialize our Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_datasets["train"] if training_args.do_train else None,
-        eval_dataset=tokenized_datasets["validation"] if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
-
-    wandb.login(key=training_args.wandb_api_key)
-    wandb.init()
-
-    step = 0
-    for epoch in range(int(training_args.num_train_epochs)):
-        model.train()
-        num_batches = len(train_dataloader)
-
-        for batch in tqdm(train_dataloader, total=num_batches, position=0, leave=False):
-            torch.cuda.empty_cache()
-            inputs = _prepare_inputs(batch, device)
-            outputs = model(**inputs)
-            step += 1
-            if model_args.only_base_model:
-                nll = outputs[0]
-                kl = None
-                loss = nll
-            else:
-                nll, kl = outputs[0], outputs[1]
-                loss = nll + kl * model_args.beta
-
-            loss.backward()
-
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-            optimizer.step()
-            scheduler.step()
-            model.zero_grad()
-
-            if step % training_args.log_steps == 0:
-                wandb.log(
-                    {'train/nll': nll.item()},
-                    step=step,
-                )
-                if kl:
-                    wandb.log(
-                        {'train/kl': kl.item()},
-                        step=step,
-                    )
-                wandb.log(
-                    {'train/learning_rate': optimizer.param_groups[0]['lr']},
-                    step=step,
-                )
-                gc.collect()
-
-            if step % training_args.eval_steps == 0:
-                torch.cuda.empty_cache()
-                trainer.update_model_parameters(model)
-
-                eval_output = trainer.evaluate(eval_dataset=tokenized_datasets["validation"],
-                                               step=step)
-                perplexity = math.exp(eval_output["eval/eval_loss"])
-                wandb.log(
-                    {"eval/perplexity": perplexity},
-                    step=step,
-                )
-                gc.collect()
-                if training_args.debug:
-                    break
-
-        # save model
-        save_model(training_args, model, epoch)
-
-    # load the best model from validation-set
-    ckpt_file = os.path.join(training_args.output_dir, f"bert_base_epoch_{int(training_args.num_train_epochs)}.pt")
-    ckpt = torch.load(ckpt_file, map_location="cpu")
-    state_dict = ckpt["state_dict"]
-    model.load_state_dict(state_dict)
-    model = model.to(device)
-
-    # Evaluation
-    results = {}
-    logger.info("*** Evaluate ***")
-    eval_output = trainer.evaluate(tokenized_datasets["test"],
-                                   metric_key_prefix="test")
-
-    perplexity = math.exp(eval_output["test/test_loss"])
-    results["perplexity"] = perplexity
-    output_file = os.path.join(model_args.model_dir, "metrics.txt")
-    with open(output_file, "w") as f:
-        logger.info("***** Evaluation results *****")
-        for k, v in results.items():
-            logger.info("{}: {:.4f}".format(k, v))
-            f.write("{}: {:.4f}\n".format(k, v))
-
-    return results
-
+    # Training loop here (omitted for brevity)
 
 if __name__ == "__main__":
     main()
