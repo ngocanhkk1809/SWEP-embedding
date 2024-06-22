@@ -1566,3 +1566,154 @@ class DataCollatorForPermutationLanguageModeling(DataCollatorMixin):
             ) & masked_indices[i]
 
         return inputs.astype(np.int64), perm_mask, target_mapping, labels.astype(np.int64)
+from transformers import DataCollatorForLanguageModeling
+import torch
+import numpy as np
+import tensorflow as tf
+from typing import List, Dict, Any, Union, Optional, Tuple
+import math
+from collections import Counter
+
+class DataCollatorForImportanceMask(DataCollatorForLanguageModeling):
+    def __init__(self, tokenizer, mlm=True, pad_to_multiple_of=None, window_size=2, max_mask_percentage=0.25):
+        super().__init__(tokenizer, mlm, 0, pad_to_multiple_of)  # Đặt mlm_probability = 0 vì không sử dụng nữa
+        self.window_size = window_size
+        self.max_mask_percentage = max_mask_percentage
+
+    def _calculate_importance_scores(self, sentences: List[str]) -> List[List[float]]:
+        num_sentences = len(sentences)
+        word_occurrences = self._word_occurrences(sentences)
+        tfidf_weights = self._calculate_tfidf_weights(word_occurrences, num_sentences)
+        entropy_values = self._calculate_entropy(sentences)
+        importance_scores = self._calculate_importance(sentences, tfidf_weights, entropy_values)
+        return importance_scores
+
+    def _word_occurrences(self, sentences):
+        word_occurrences = {}
+        for sentence in sentences:
+            words = sentence.lower().split()
+            word_counts = Counter(words)
+            word_occurrences[sentence] = word_counts
+        return word_occurrences
+
+    def _calculate_tfidf_weights(self, word_occurrences, num_sentences):
+        tfidf_weights = {}
+        for sentence, word_counts in word_occurrences.items():
+            sentence_tfidf_weights = {}
+            for word, count in word_counts.items():
+                tf = count / len(sentence.split())
+                num_sentences_with_word = sum(1 for s in word_occurrences if word in word_occurrences[s])
+                idf = math.log(num_sentences / (1 + num_sentences_with_word))
+                sentence_tfidf_weights[word] = tf * idf
+            tfidf_weights[sentence] = sentence_tfidf_weights
+        return tfidf_weights
+
+    def _calculate_entropy(self, sentences):
+        all_words = [word for sentence in sentences for word in sentence.lower().split()]
+        word_counts = Counter(all_words)
+        total_words = sum(word_counts.values())
+        entropy_values = {}
+        for word, count in word_counts.items():
+            p_w = count / total_words
+            entropy_values[word] = -p_w * math.log(p_w) if p_w > 0 else 0
+        return entropy_values
+
+    def _calculate_importance(self, sentences, tfidf_weights, entropy_values):
+        importance_scores = []
+        for sentence in sentences:
+            words = sentence.lower().split()
+            tfidf_scores = [tfidf_weights[sentence].get(word, 0) for word in words]
+            entropy_scores = [entropy_values.get(word, 0) for word in words]
+            tfidf_norm = sum(tfidf_scores)
+            entropy_norm = sum(entropy_scores)
+            importance_scores.append([
+                (tfidf / tfidf_norm if tfidf_norm > 0 else 0) + (entropy / entropy_norm if entropy_norm > 0 else 0)
+                for tfidf, entropy in zip(tfidf_scores, entropy_scores)
+            ])
+        return importance_scores
+
+    def _mask_high_importance_words(self, sentences, importance_scores):
+        masked_sentences = []
+        for sentence, scores in zip(sentences, importance_scores):
+            words = sentence.split()
+            sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+            num_to_mask = int(len(words) * self.max_mask_percentage)
+            
+            masked_indices = set()
+            for i in sorted_indices[:num_to_mask]:
+                start_index = max(0, i - self.window_size)
+                end_index = min(len(words), i + self.window_size + 1)
+                for j in range(start_index, end_index):
+                    masked_indices.add(j)
+            
+            for i in masked_indices:
+                words[i] = self.tokenizer.mask_token  # Replace important words and their neighbors with [MASK]
+
+            masked_sentences.append(' '.join(words))
+        return masked_sentences
+
+    def torch_mask_tokens(self, inputs, special_tokens_mask=None):
+        sentences = [self.tokenizer.decode(input_ids, skip_special_tokens=True) for input_ids in inputs.tolist()]
+        importance_scores = self._calculate_importance_scores(sentences)
+        masked_sentences = self._mask_high_importance_words(sentences, importance_scores)
+
+        tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="pt")
+        inputs, labels = tokenized["input_ids"], tokenized["input_ids"].clone()
+        
+        masked_indices = inputs != labels
+        labels[~masked_indices] = -100  # Chỉ tính loss trên các từ đã mask
+
+        # 80% thời gian, thay thế từ đã mask bằng [MASK]
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
+
+        # 10% thời gian, thay thế từ đã mask bằng từ ngẫu nhiên
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.1)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        return inputs, labels
+
+    def tf_mask_tokens(self, inputs, special_tokens_mask=None):
+        sentences = [self.tokenizer.decode(input_ids, skip_special_tokens=True) for input_ids in inputs.numpy()]
+        importance_scores = self._calculate_importance_scores(sentences)
+        masked_sentences = self._mask_high_importance_words(sentences, importance_scores)
+
+        tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="tf")
+        inputs, labels = tokenized["input_ids"], tf.identity(tokenized["input_ids"])
+
+        masked_indices = tf.not_equal(inputs, labels)
+        labels = tf.where(~masked_indices, -100, labels)  # Chỉ tính loss trên các từ đã mask
+
+        # 80% thời gian, thay thế từ đã mask bằng [MASK]
+        indices_replaced = tf.cast(tf.less(tf.random.uniform(labels.shape), 0.8), tf.bool) & masked_indices
+        inputs = tf.where(indices_replaced, self.tokenizer.mask_token_id, inputs)
+
+        # 10% thời gian, thay thế từ đã mask bằng từ ngẫu nhiên
+        indices_random = tf.cast(tf.less(tf.random.uniform(labels.shape), 0.1), tf.bool) & masked_indices & ~indices_replaced
+        random_words = tf.random.uniform(labels.shape, maxval=len(self.tokenizer), dtype=inputs.dtype)
+        inputs = tf.where(indices_random, random_words, inputs)
+
+        return inputs, labels
+
+    def numpy_mask_tokens(self, inputs, special_tokens_mask=None):
+        sentences = [self.tokenizer.decode(input_ids, skip_special_tokens=True) for input_ids in inputs]
+        importance_scores = self._calculate_importance_scores(sentences)
+        masked_sentences = self._mask_high_importance_words(sentences, importance_scores)
+
+        tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="np")
+        inputs, labels = tokenized["input_ids"], np.copy(tokenized["input_ids"])
+
+        masked_indices = inputs != labels
+        labels[~masked_indices] = -100  # Chỉ tính loss trên các từ đã mask
+
+        # 80% thời gian, thay thế từ đã mask bằng [MASK]
+        indices_replaced = np.random.binomial(1, 0.8, size=labels.shape).astype(bool) & masked_indices
+        inputs[indices_replaced] = self.tokenizer.mask_token_id
+
+        # 10% thời gian, thay thế từ đã mask bằng từ ngẫu nhiên
+        indices_random = np.random.binomial(1, 0.1, size=labels.shape).astype(bool) & masked_indices & ~indices_replaced
+        random_words = np.random.randint(0, len(self.tokenizer), labels.shape)
+        inputs[indices_random] = random_words[indices_random]
+
+        return inputs, labels
