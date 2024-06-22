@@ -4773,6 +4773,7 @@ if TYPE_CHECKING:
         DataCollatorWithPadding,
         DefaultDataCollator,
         default_data_collator,
+        DataCollatorForImportanceMask,
     )
     from .feature_extraction_sequence_utils import SequenceFeatureExtractor
 
