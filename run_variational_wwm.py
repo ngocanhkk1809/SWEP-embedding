@@ -20,6 +20,7 @@ from transformers import (
     AutoConfig,
     AutoTokenizer,
     DataCollatorForWholeWordMask,
+    DataCollatorForImportanceMask,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
