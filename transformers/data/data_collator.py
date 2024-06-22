@@ -1575,7 +1575,6 @@ import math
 
 class DataCollatorForImportanceMask(DataCollatorForLanguageModeling):
     def __init__(self, tokenizer, mlm=True, pad_to_multiple_of=None, window_size=2, max_mask_percentage=0.25):
-        # Note: mlm_probability is not needed in this custom collator
         super().__init__(tokenizer, mlm, 0.0, pad_to_multiple_of)  # mlm_probability is set to 0.0
         self.window_size = window_size
         self.max_mask_percentage = max_mask_percentage
@@ -1661,20 +1660,10 @@ class DataCollatorForImportanceMask(DataCollatorForLanguageModeling):
 
         tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="pt")
         inputs, labels = tokenized["input_ids"], tokenized["input_ids"].clone()
-        
-        probability_matrix = torch.full(labels.shape, self.mlm_probability)
-        if special_tokens_mask is not None:
-            probability_matrix.masked_fill_(special_tokens_mask.bool(), value=0.0)
 
-        masked_indices = torch.bernoulli(probability_matrix).bool()
-        labels[~masked_indices] = -100  
-
-        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
-        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
-
-        indices_random = torch.bernoulli(torch.full(labels.shape, 0.1)).bool() & masked_indices & ~indices_replaced
-        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
-        inputs[indices_random] = random_words[indices_random]
+        # Update labels for masked language modeling
+        masked_indices = (labels != inputs)  # `inputs` have [MASK], `labels` do not
+        labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
         return inputs, labels
 
@@ -1686,19 +1675,9 @@ class DataCollatorForImportanceMask(DataCollatorForLanguageModeling):
         tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="tf")
         inputs, labels = tokenized["input_ids"], tf.identity(tokenized["input_ids"])
 
-        probability_matrix = tf.fill(labels.shape, self.mlm_probability)
-        if special_tokens_mask is not None:
-            probability_matrix = tf.where(special_tokens_mask, 0.0, probability_matrix)
-
-        masked_indices = tf.cast(tf.less(tf.random.uniform(labels.shape), probability_matrix), tf.bool)
-        labels = tf.where(masked_indices, inputs, -100)
-
-        indices_replaced = tf.cast(tf.less(tf.random.uniform(labels.shape), 0.8), tf.bool) & masked_indices
-        inputs = tf.where(indices_replaced, self.tokenizer.mask_token_id, inputs)
-
-        indices_random = tf.cast(tf.less(tf.random.uniform(labels.shape), 0.1), tf.bool) & masked_indices & ~indices_replaced
-        random_words = tf.random.uniform(labels.shape, maxval=len(self.tokenizer), dtype=inputs.dtype)
-        inputs = tf.where(indices_random, random_words, inputs)
+        # Update labels for masked language modeling
+        masked_indices = (labels != inputs)  # `inputs` have [MASK], `labels` do not
+        labels = tf.where(masked_indices, inputs, -100)  # We only compute loss on masked tokens
 
         return inputs, labels
 
@@ -1710,18 +1689,8 @@ class DataCollatorForImportanceMask(DataCollatorForLanguageModeling):
         tokenized = self.tokenizer(masked_sentences, padding=True, truncation=True, return_tensors="np")
         inputs, labels = tokenized["input_ids"], np.copy(tokenized["input_ids"])
 
-        probability_matrix = np.full(labels.shape, self.mlm_probability)
-        if special_tokens_mask is not None:
-            probability_matrix[special_tokens_mask.astype(bool)] = 0.0
-
-        masked_indices = np.random.binomial(1, probability_matrix).astype(bool)
-        labels[~masked_indices] = -100  
-
-        indices_replaced = np.random.binomial(1, 0.8, size=labels.shape).astype(bool) & masked_indices
-        inputs[indices_replaced] = self.tokenizer.mask_token_id
-
-        indices_random = np.random.binomial(1, 0.1, size=labels.shape).astype(bool) & masked_indices & ~indices_replaced
-        random_words = np.random.randint(0, len(self.tokenizer), labels.shape)
-        inputs[indices_random] = random_words[indices_random]
+        # Update labels for masked language modeling
+        masked_indices = (labels != inputs)  # `inputs` have [MASK], `labels` do not
+        labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
         return inputs, labels
