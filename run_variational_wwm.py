@@ -5,9 +5,6 @@ import logging
 import math
 import os
 import sys
-import re
-import random
-from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Union, Any, Mapping
 import torch
@@ -182,6 +179,14 @@ class DataTrainingArguments:
             )
         },
     )
+    window_size: int = field(
+        default=2,
+        metadata={"help": "The size of the window for masking neighboring words."}
+    )
+    max_mask_percentage: float = field(
+        default=0.25,
+        metadata={"help": "The maximum percentage of words to mask based on importance."}
+    )
 
     def __post_init__(self):
         if self.train_file is not None:
@@ -228,110 +233,6 @@ def save_model(args, model, epoch):
     ckpt_file = os.path.join(args.output_dir, f"bert_base_epoch_{epoch}.pt")
     ckpt = {"args": args, "state_dict": model.state_dict()}
     torch.save(ckpt, ckpt_file)
-
-
-def processFile(file_text):
-    sentences = re.split(r'\.\s*', file_text)
-    sentences = [sentence.strip() for sentence in sentences if sentence]
-    number_of_sentences = len(sentences)
-    return sentences, number_of_sentences
-
-def word_occur_in_sentences(sentences):
-    word_occur_in_sentences = {}
-    for sentence in sentences:
-        sentence_words = sentence.lower().split()
-        word_counts = Counter(sentence_words)
-        word_occur_in_sentences[sentence] = word_counts
-    return word_occur_in_sentences
-
-def calculate_tfidf_weights(word_occur_in_sentences, number_of_sentences):
-    tfidf_weights = {}
-    for sentence, word_counts in word_occur_in_sentences.items():
-        sentence_tfidf_weights = {}
-        for word, count in word_counts.items():
-            tf = count / len(sentence.split())
-            num_sentences_with_word = sum([1 for sent in word_occur_in_sentences if word in word_occur_in_sentences[sent]])
-            idf = math.log(number_of_sentences / (1 + num_sentences_with_word))
-            tfidf_weight = tf * idf
-            sentence_tfidf_weights[word] = tfidf_weight
-        tfidf_weights[sentence] = sentence_tfidf_weights
-    return tfidf_weights
-
-def calculate_entropy(sentences):
-    all_words = [word for sentence in sentences for word in sentence.lower().split()]
-    word_counts = Counter(all_words)
-    total_words = sum(word_counts.values())
-    
-    entropy_values = {}
-    for word, count in word_counts.items():
-        p_w = count / total_words
-        if p_w > 0:
-            entropy_values[word] = -p_w * math.log(p_w)
-        else:
-            entropy_values[word] = 0
-    
-    return entropy_values
-
-def calculate_importance(sentences, tfidf_weights, entropy_values):
-    importance_scores = []
-    for sentence in sentences:
-        words = sentence.lower().split()
-        tfidf_scores = [tfidf_weights[sentence][word] if word in tfidf_weights[sentence] else 0 for word in words]
-        entropy_scores = [entropy_values[word] if word in entropy_values else 0 for word in words]
-
-        tfidf_norm = sum(tfidf_scores)
-        entropy_norm = sum(entropy_scores)
-
-        importance_scores.append([
-            (tfidf / tfidf_norm if tfidf_norm > 0 else 0) + (entropy / entropy_norm if entropy_norm > 0 else 0)
-            for tfidf, entropy in zip(tfidf_scores, entropy_scores)
-        ])
-    return importance_scores
-
-def mask_high_importance_words(sentences, importance_scores, window_size):
-    masked_sentences = []
-    for sentence, scores in zip(sentences, importance_scores):
-        words = sentence.split()
-        sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        
-        for i in sorted_indices[:window_size]:
-            surrounding_words = []
-            for j in range(max(0, i - window_size), min(len(words), i + window_size + 1)):
-                if j != i:
-                    surrounding_words.append(words[j])
-            
-            if surrounding_words:
-                words[i] = surrounding_words[0]  
-        
-        masked_sentences.append(' '.join(words))
-    return masked_sentences
-
-def randomly_permute_remaining_words(sentences, max_percentage):
-    permuted_sentences = []
-    for sentence in sentences:
-        words = sentence.split()
-        num_to_permute = int(len(words) * max_percentage)
-        indices_to_permute = random.sample(range(len(words)), num_to_permute)
-        random.shuffle(indices_to_permute)
-        for i, j in zip(sorted(indices_to_permute), indices_to_permute):
-            words[i], words[j] = words[j], words[i]
-        permuted_sentences.append(' '.join(words))
-    return permuted_sentences
-
-def custom_data_collator(features):
-    sentences = [feature['text'] for feature in features]
-    sentences, num_sentences = processFile('\n'.join(sentences))
-    word_occur = word_occur_in_sentences(sentences)
-    tfidf_weights = calculate_tfidf_weights(word_occur, num_sentences)
-    entropy_values = calculate_entropy(sentences)
-    importance_scores = calculate_importance(sentences, tfidf_weights, entropy_values)
-    masked_sentences = mask_high_importance_words(sentences, importance_scores, window_size=5)
-    permuted_sentences = randomly_permute_remaining_words(masked_sentences, max_percentage=0.1)
-    
-    for i, sentence in enumerate(permuted_sentences):
-        features[i]['input_ids'] = tokenizer(sentence, truncation=True, padding='max_length')['input_ids']
-    
-    return features
 
 
 def main():
@@ -396,7 +297,7 @@ def main():
     # download the dataset.
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
-        datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name,trust_remote_code=True)
+        datasets = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
         if "validation" not in datasets.keys():
             datasets["validation"] = load_dataset(
                 data_args.dataset_name,
@@ -418,7 +319,6 @@ def main():
         if extension == "txt":
             extension = "text"
         datasets = load_dataset(extension, data_files=data_files)
-
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.
 
@@ -483,9 +383,14 @@ def main():
         load_from_cache_file=not data_args.overwrite_cache,
     )
 
-    # Use the custom data collator
-    data_collator = custom_data_collator
-
+    # Data collator
+    # This one will take care of randomly masking the tokens.
+    #data_collator = DataCollatorForWholeWordMask(tokenizer=tokenizer, mlm_probability=data_args.mlm_probability)
+    data_collator = DataCollatorForImportanceMask(
+    tokenizer=tokenizer,
+    window_size=data_args.window_size,  # Điều chỉnh window_size
+    max_mask_percentage=data_args.max_mask_percentage  # Điều chỉnh max_mask_percentage
+)
     device = torch.cuda.current_device()
 
     if model_args.model_name_or_path:
