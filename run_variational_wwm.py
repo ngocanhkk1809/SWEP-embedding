@@ -13,6 +13,7 @@ from tqdm import tqdm
 from datasets import Dataset, load_dataset
 
 import transformers
+from transformers.data.data_collator import DataCollatorForImportanceMask
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_MASKED_LM_MAPPING,
@@ -20,7 +21,6 @@ from transformers import (
     AutoConfig,
     AutoTokenizer,
     DataCollatorForWholeWordMask,
-    DataCollatorForImportanceMask,
     HfArgumentParser,
     Trainer,
     TrainingArguments,
