@@ -390,8 +390,7 @@ def main():
     data_collator = DataCollatorForImportanceMask(
     tokenizer=tokenizer,
     window_size=data_args.window_size,  # Điều chỉnh window_size
-    max_mask_percentage=data_args.max_mask_percentage  # Điều chỉnh max_mask_percentage
-)
+    max_mask_percentage=data_args.max_mask_percentage  # Điều chỉnh max_mask_percentage)
     device = torch.cuda.current_device()
 
     if model_args.model_name_or_path:
